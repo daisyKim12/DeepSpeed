@@ -83,7 +83,20 @@ __global__ void bias_add_transform_0213(float* output,
 
 #define ATTN_H 3
 #define MAX_SEQ_LINE 10
+/* 
+transform: qkv에 특정 Bias를 더하고 rotate 시키는 커널
+이 코드는 특정 형식 T의 입력 배열 vals에 편향(bias)을 추가하고 변환하는 CUDA 커널입니다. 이 코드의 목적은 주어진 입력에 편향을 추가하고, 이를 특정 방식으로 변환하여 출력으로 내보내는 것입니다.
 
+
+커널 함수는 다음의 매개변수를 받습니다:
+    output: 출력 배열로, 변환된 결과가 저장됩니다.
+    k_cache, v_cache: k와 v 캐시 배열입니다. 이들은 q 행렬과 동일한 차원을 갖습니다. 주로 self-attention 메커니즘에서 사용됩니다.
+    vals: 입력 qkv 배열로, Query, Key, Value의 정보를 함께 가지고 있습니다.
+    bias: 편향 배열입니다.
+    hidden_dim: 숨겨진 차원의 크기입니다.
+    seq_length: 시퀀스의 길이입니다.
+
+*/
 template <typename T>
 __global__ void bias_add_transform_0213(T* output,  // q
                                         T* k_cache,

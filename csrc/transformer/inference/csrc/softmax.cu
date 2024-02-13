@@ -49,21 +49,34 @@ __global__ void attn_softmax_v2(T* vals,
                                 int mp_size,
                                 int reduceWidth)
 {
-    cg::thread_block b = cg::this_thread_block();
-    cg::thread_block_tile<WARP_SIZE> g = cg::tiled_partition<WARP_SIZE>(b);
 
+/*     
+Kernel for Softmax 
+커널 함수 내부의 동작:
+
+각 스레드가 담당하는 데이터를 처리하기 위해 반복문을 설정합니다.
+입력 데이터를 로드하고 마스크 및 추가 정보를 적용합니다.
+로드한 데이터의 최댓값을 찾습니다.
+소프트맥스 함수를 적용하여 값을 정규화합니다.
+정규화된 값으로 출력 배열을 업데이트합니다.
+*/
+
+    cg::thread_block b = cg::this_thread_block();                                   // CUDA Cooperative Group (cg) 라이브러리를 사용하여 스레드 블록을 정의합니다.
+    cg::thread_block_tile<WARP_SIZE> g = cg::tiled_partition<WARP_SIZE>(b);         // 스레드 블록 내의 워프를 구성합니다.
+
+    // 하나의 warp가 사용할 수 있는 reg를 최대로 사용한다.
     float2 low_data[MAX_REG_SIZE];
     float2 high_data[MAX_REG_SIZE];
     const T zero_h = conversion::to<T>(0.f);
 
-    int wid = threadIdx.x >> 5;
-    int lane = threadIdx.x & 0x1f;
-    int warp_num = blockDim.x >> 5;
+    int wid = threadIdx.x >> 5;                         //현재 쓰레드가 속한 워프 아이디
+    int lane = threadIdx.x & 0x1f;                      //현재 스레드가 속한 워프 내에서의 스레드의 위치를 나타냅니다.
+    int warp_num = blockDim.x >> 5;                     //한 워프에 포함된 스레드 수를 나타냅니다.
 
-    int reduce_blocks = reduceWidth >> 5;
-    int seq_lane = threadIdx.x % reduceWidth;
+    int reduce_blocks = reduceWidth >> 5;               //워프 단위로 Reduce 했을 때 남는 크기
+    int seq_lane = threadIdx.x % reduceWidth;           //??
 
-    __shared__ float partialSum[MAX_WARP_NUM];
+    __shared__ float partialSum[MAX_WARP_NUM];          //워프가 가지는 부분합을 저장함
 
     int iter_offset = blockIdx.x * (warp_num / reduce_blocks) + (wid / reduce_blocks);
     int batch_idx = iter_offset / (num_seq * heads);
@@ -84,9 +97,13 @@ __global__ void attn_softmax_v2(T* vals,
         int window_stride =
             (local_attention && real_seq_id >= window_size) ? real_seq_id - window_size : -1;
 
+        // 최대값 저장
         float max_val = minus_infinity;
+// 각 스레드가 담당하는 데이터를 처리하기 위해 반복문을 설정합니다.
         // if (lane == 0) printf("%d, %d: %d \n", wid, blockIdx.x, mask_offset);
         for (int i = 0; i < iterations; i++) {
+
+// 입력 데이터를 로드하고 마스크 및 추가 정보를 적용합니다.
             int data_id = i * (reduceWidth << 2) + (seq_lane);
             bool check = (data_id >> 2) >= window_stride4;
             bool low_x_check = check && (data_id < sequence_length) &&
@@ -192,6 +209,7 @@ __global__ void attn_softmax_v2(T* vals,
             max_val = (high_data[i].y > max_val ? high_data[i].y : max_val);
         }
 
+// 로드한 데이터의 최댓값을 찾습니다.
         for (int i = 1; i < WARP_SIZE; i *= 2) {
             auto temp = g.shfl_xor(max_val, i);
             max_val = (temp > max_val ? temp : max_val);
@@ -213,6 +231,8 @@ __global__ void attn_softmax_v2(T* vals,
             max_val = g.shfl(max_val, threadIdx.x / WARP_SIZE);
         }
         float sum = 0;
+
+// 소프트맥스 함수를 적용하여 값을 정규화합니다.
         for (int i = 0; i < iterations; i++) {
             low_data[i].x = __expf(low_data[i].x - max_val);
             low_data[i].y = __expf(low_data[i].y - max_val);
